@@ -2,3 +2,12 @@
 test/testapp
 *.png
 *.ico
+test1/
+*/android
+*/assets
+*/ios
+*/linux
+*/macos
+*/test
+*/web
+*/windows
