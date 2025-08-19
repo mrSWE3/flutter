@@ -8,9 +8,39 @@ import 'dart:async';
 import 'auth/secrets.dart';
 import 'package:intl/intl.dart';
 
+Position? globalPos;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(MyApp());
+
+  if (await _checkLocationPermissionOnce()) {
+    globalPos = await Geolocator.getCurrentPosition();
+    print("got pos");
+    runApp(MyApp());
+  }else{
+    runApp(MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: "Premission denied",
+    home: Scaffold(
+      body: Center(
+        child:  Text('Please enable location permission in settings and restart the app.'),
+      ),
+    ),
+  ));
+  }
+
+}
+//Inspired by https://fernandoptr.medium.com/how-to-get-users-current-location-address-in-flutter-geolocator-geocoding-be563ad6f66a
+Future<bool> _checkLocationPermissionOnce() async {
+  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) return false;
+
+  LocationPermission permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+  }
+  return permission == LocationPermission.always ||
+      permission == LocationPermission.whileInUse;
 }
 
 class MyApp extends StatelessWidget {
@@ -29,10 +59,12 @@ class MyApp extends StatelessWidget {
           error: Colors.red,
           onError: Colors.white,
           secondary: Colors.amber,
-          onSecondary: Colors.black,
+          onSecondary: const Color.fromRGBO(0, 0, 0, 1),
         ),
         appBarTheme: AppBarTheme(elevation: 6, shadowColor: Colors.black),
       ),
+      
+      debugShowCheckedModeBanner: false,
       home: const MyHomePage(title: 'Weather App'),
     );
   }
@@ -45,62 +77,10 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-//Taken form https://fernandoptr.medium.com/how-to-get-users-current-location-address-in-flutter-geolocator-geocoding-be563ad6f66a
-Future<bool> _handleLocationPermission(BuildContext context) async {
-  bool serviceEnabled;
-  LocationPermission permission;
-
-  serviceEnabled = await Geolocator.isLocationServiceEnabled();
-  if (!serviceEnabled) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Location services are disabled. Please enable the services',
-        ),
-      ),
-    );
-    return false;
-  }
-  permission = await Geolocator.checkPermission();
-  if (permission == LocationPermission.denied) {
-    permission = await Geolocator.requestPermission();
-    if (permission == LocationPermission.denied) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location permissions are denied')),
-      );
-      return false;
-    }
-  }
-  if (permission == LocationPermission.deniedForever) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Location permissions are permanently denied, we cannot request permissions.',
-        ),
-      ),
-    );
-    return false;
-  }
-  return true;
+Position? getPosition() {
+  return globalPos;
 }
 
-Future<Position?> getPosition(BuildContext context) {
-  return _handleLocationPermission(context).then((value) {
-    if (value) {
-      return Geolocator.getCurrentPosition();
-    }
-    return null;
-  });
-}
-
-Future<Placemark?> getLocation(Position pos) {
-  return placemarkFromCoordinates(pos.latitude, pos.longitude).then((value) {
-    if (value.isEmpty) {
-      return null;
-    }
-    return value[0];
-  });
-}
 
 class _MyHomePageState extends State<MyHomePage> {
   HomePage homePage = HomePage();
@@ -196,37 +176,14 @@ class _HomePageState extends State<HomePage> {
   final Map<String, dynamic> _cachedData = {};
   int timeUntillRefresh = 0;
 
-  Future<void> loadForever() async {
-    while (true) {
-      Future delay = (() async {
-        for (
-          timeUntillRefresh = 10;
-          timeUntillRefresh > 0;
-          timeUntillRefresh--
-        ) {
-          setState(() {});
-          await Future.delayed(Duration(seconds: 1));
-        }
-      })();
-      var dict = await loadData();
-      await delay;
-      _cachedData.addAll(dict);
-      setState(() {});
-    }
-  }
 
   Future<Map<String, dynamic>> loadData() async {
-    Position? pos = await getPosition(context);
+    Position? pos = getPosition();
     if (pos == null) {
       return {};
     }
     Map<String, dynamic> dict = {"position": pos};
     Map<String, dynamic> weatherData = await fetchWeatherData(pos);
-    if (_cachedData["iconName"] != null) {
-      if (weatherData["iconName"] == _cachedData["iconName"]) {
-        weatherData.remove("icon");
-      }
-    }
     dict.addAll(weatherData);
     List<Placemark> placemarks = await placemarkFromCoordinates(
       pos.latitude,
@@ -272,7 +229,7 @@ class _HomePageState extends State<HomePage> {
     description =
         description.substring(0, 1).toUpperCase() +
         description.substring(1, description.length);
-    double temp = _cachedData["temp"];
+    double temp = _cachedData["temp"].toDouble();
 
     return Center(
       child: Column(
@@ -337,7 +294,6 @@ class _HomePageState extends State<HomePage> {
               margin: EdgeInsets.only(bottom: 10),
               child: Column(
                 children: [
-                  Text("Refresh in $timeUntillRefresh"),
                   Text(DateFormat('EEEE, MMMM d, yyyy hh:mm a').format(date)),
                 ],
               ),
@@ -391,7 +347,7 @@ class _ForcastPageState extends State<ForcastPage> {
   int timeUntillRefresh = 0;
 
   Future<Map<String, dynamic>> loadData() async {
-    Position? pos = await getPosition(context);
+    Position? pos = getPosition();
     if (pos == null) {
       return {};
     }
@@ -408,36 +364,6 @@ class _ForcastPageState extends State<ForcastPage> {
     return dict;
   }
 
-  Future<void> loadForever() async {
-    while (true) {
-      Future delay = (() async {
-        for (
-          timeUntillRefresh = 10;
-          timeUntillRefresh > 0;
-          timeUntillRefresh--
-        ) {
-          setState(() {});
-          await Future.delayed(Duration(seconds: 1));
-        }
-      })();
-      var dict = await loadData();
-
-      if (_cachedData.isNotEmpty) {
-        for (int i = 0; i < dict["forcasts"].length; i++) {
-          print("${dict["forcasts"].length} ${_cachedData["forcasts"].length}");
-          if (_cachedData != {} &&
-              dict["forcasts"][i]["iconName"] ==
-                  _cachedData["forcasts"][i]["iconName"]) {
-            dict["forcasts"][i]["icon"] = _cachedData["forcasts"][i]["icon"];
-          }
-        }
-      }
-
-      await delay;
-      _cachedData.addAll(dict);
-      setState(() {});
-    }
-  }
 
   @override
   void initState() {
