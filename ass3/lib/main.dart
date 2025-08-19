@@ -4,6 +4,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'auth/secrets.dart';
+import 'package:intl/intl.dart';
 
 void main() async {
   runApp(MyApp());
@@ -163,27 +164,23 @@ Future<Map<String, dynamic>> fetchWeatherData(Position pos) async {
   double lat = pos.latitude;
   double lon = pos.longitude;
   final url = Uri.parse(
-    'https://api.openweathermap.org/data/2.5/lat=$lat&lon=$lon&appid=$API_KEY&units=metric',
+    'https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lon&appid=$API_KEY&units=metric',
   );
   final response = await http.get(url);
   if (response.statusCode == 200) {
     Map<String, dynamic> body = jsonDecode(response.body);
-    print(body.toString());
     String iconName = body["weather"][0]["icon"];
-    final url = Uri.parse(
-    'https://openweathermap.org/img/wn/$iconName@2x.png',
-  );
+    final url = Uri.parse('https://openweathermap.org/img/wn/$iconName@2x.png');
     final responseIcon = await http.get(url);
-    
     return {
       "description": body["weather"][0]["description"],
-      "icon": Image.memory(responseIcon.bodyBytes),
+      "icon": Image.memory(responseIcon.bodyBytes, fit: BoxFit.fill),
+      "iconName": iconName,
       "temp": body["main"]["temp"],
     };
   }
   return {};
 }
-
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -194,33 +191,47 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final Map<String, dynamic> _cachedData = {};
+  int timeUntillRefresh = 0;
 
   Future<void> loadForever() async {
-    while(true){
-      Future delay= Future.delayed(Duration(seconds: 10));
-      await loadData();
+    while (true) {
+      Future delay = (() async {
+        for (
+          timeUntillRefresh = 10;
+          timeUntillRefresh > 0;
+          timeUntillRefresh--
+        ) {
+          setState(() {});
+          await Future.delayed(Duration(seconds: 1));
+        }
+      })();
+      var dict = await loadData();
       await delay;
+      _cachedData.addAll(dict);
+      setState(() {});
     }
   }
 
-  Future<void> loadData() async {
+  Future<Map<String, dynamic>> loadData() async {
     Position? pos = await getPosition(context);
     if (pos == null) {
-      return;
+      return {};
     }
-    print("Got pos $pos");
     Map<String, dynamic> dict = {"position": pos};
-    dict.addAll(await fetchWeatherData(pos));
+    Map<String, dynamic> weatherData = await fetchWeatherData(pos);
+    if (weatherData["iconName"] == _cachedData["iconName"]) {
+      weatherData.remove("icon");
+    }
+    dict.addAll(weatherData);
     List<Placemark> placemarks = await placemarkFromCoordinates(
       pos.latitude,
       pos.longitude,
     );
-    if (!placemarks.isEmpty) {
+    if (placemarks.isNotEmpty) {
       dict["Location"] = placemarks[0];
     }
     dict["time"] = DateTime.now();
-    _cachedData.addAll(dict);
-    setState(() {});
+    return dict;
   }
 
   @override
@@ -232,12 +243,102 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     if (_cachedData.isEmpty) {
-      return CircularProgressIndicator();
+      return Center(child: CircularProgressIndicator());
     }
+    Image icon = _cachedData["icon"];
+    Placemark location = _cachedData["Location"];
+    String country = [
+      location.isoCountryCode,
+      location.country,
+      location.administrativeArea,
+    ].firstWhere((v) => v != null && v != "", orElse: () => "")!;
+    String palce = [
+      location.subLocality,
+      location.locality,
+      location.subAdministrativeArea,
+    ].firstWhere((v) => v != null && v != "", orElse: () => "")!;
+    DateTime date = _cachedData["time"];
+    String description = _cachedData["description"];
+    description =
+        description.substring(0, 1).toUpperCase() +
+        description.substring(1, description.length);
+    double temp = _cachedData["temp"];
 
-    return Text(_cachedData.toString());
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  "${temp.round()} °C",
+                  style: TextStyle(fontSize: 60, fontWeight: FontWeight.bold),
+                ),
+                Container(
+                  margin: EdgeInsets.only(bottom: 5),
+                  child: Container(
+                    padding: EdgeInsets.only(bottom: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.lightBlueAccent,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(20),
+                        bottom: Radius.circular(20),
+                      ),
+                    ),
+                    child: SizedBox(width: 200, height: 200, child: icon),
+                  ),
+                ),
+
+                Transform.translate(
+                  offset: Offset(0, -42),
+                  child: Column(
+                    children: [
+                      Text(
+                        description,
+                        style: TextStyle(
+                          fontSize: 22,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
+                          shadows: List.generate(
+                            20,
+                            (_) => Shadow(blurRadius: 5),
+                          ),
+                        ),
+                      ),
+                      Container(
+                        margin: EdgeInsets.only(top: 15),
+                        child: Text(
+                          "$country, $palce",
+                          style: TextStyle(fontSize: 20),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              margin: EdgeInsets.only(bottom: 10),
+              child: Column(
+                children: [
+                  Text("Refresh in $timeUntillRefresh"),
+                  Text(DateFormat('EEEE, MMMM d, yyyy hh:mm a').format(date)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
+
 Future<List<Map<String, dynamic>>> fetchForcast(Position pos) async {
   double lat = pos.latitude;
   double lon = pos.longitude;
@@ -248,20 +349,26 @@ Future<List<Map<String, dynamic>>> fetchForcast(Position pos) async {
   if (response.statusCode == 200) {
     Map<String, dynamic> body = jsonDecode(response.body);
     List<dynamic> forcasts = body["list"];
-    return await Future.wait(forcasts.map((e) async {
-      String iconName = e["weather"][0]["icon"];
-    final url = Uri.parse('https://openweathermap.org/img/wn/$iconName@2x.png');
-    final responseIcon = await http.get(url);
-      return {
-        "time": DateTime.fromMillisecondsSinceEpoch(e["dt"] * 1000),
-        "description": e["weather"][0]["description"],
-        "icon": Image.memory(responseIcon.bodyBytes),
-        "temp": e["main"]["temp"],
-      };
-    }).toList());
+    return await Future.wait(
+      forcasts.map((e) async {
+        String iconName = e["weather"][0]["icon"];
+        final url = Uri.parse(
+          'https://openweathermap.org/img/wn/$iconName@2x.png',
+        );
+        final responseIcon = await http.get(url);
+        return {
+          "time": DateTime.fromMillisecondsSinceEpoch(e["dt"] * 1000),
+          "description": e["weather"][0]["description"],
+          "icon": Image.memory(responseIcon.bodyBytes),
+          "iconName": iconName,
+          "temp": e["main"]["temp"],
+        };
+      }).toList(),
+    );
   }
   return [];
 }
+
 class ForcastPage extends StatefulWidget {
   const ForcastPage({super.key});
 
@@ -271,33 +378,53 @@ class ForcastPage extends StatefulWidget {
 
 class _ForcastPageState extends State<ForcastPage> {
   final Map<String, dynamic> _cachedData = {};
+  int timeUntillRefresh = 0;
 
-  Future<void> loadForever() async {
-    while(true){
-      Future delay= Future.delayed(Duration(seconds: 10));
-      await loadData();
-      await delay;
-    }
-  }
-
-  Future<void> loadData() async {
+  Future<Map<String, dynamic>> loadData() async {
     Position? pos = await getPosition(context);
     if (pos == null) {
-      return;
+      return {};
     }
-    print("Got pos $pos");
     Map<String, dynamic> dict = {"position": pos};
     dict["time"] = DateTime.now();
     List<Placemark> placemarks = await placemarkFromCoordinates(
       pos.latitude,
       pos.longitude,
     );
-    if (!placemarks.isEmpty) {
+    if (placemarks.isNotEmpty) {
       dict["Location"] = placemarks[0];
     }
     dict["forcasts"] = await fetchForcast(pos);
-    _cachedData.addAll(dict);
-    setState(() {});
+    return dict;
+  }
+
+  Future<void> loadForever() async {
+    while (true) {
+      Future delay = (() async {
+        for (
+          timeUntillRefresh = 10;
+          timeUntillRefresh > 0;
+          timeUntillRefresh--
+        ) {
+          setState(() {});
+          await Future.delayed(Duration(seconds: 1));
+        }
+      })();
+      var dict = await loadData();
+
+    if(_cachedData.isNotEmpty){
+      for(int i = 0; i < dict["forcasts"].length; i++){
+        print("${dict["forcasts"].length} ${_cachedData["forcasts"].length}");
+        if(_cachedData != {} && dict["forcasts"][i]["iconName"] == _cachedData["forcasts"][i]["iconName"]){
+          dict["forcasts"][i]["icon"] = _cachedData["forcasts"][i]["icon"];
+        };
+      }}
+     
+
+      await delay;
+      _cachedData.addAll(dict);
+      setState(() {});
+    }
   }
 
   @override
@@ -306,13 +433,68 @@ class _ForcastPageState extends State<ForcastPage> {
     loadForever();
   }
 
+    @override
+  void dispose() {
+    
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_cachedData.isEmpty) {
-      return CircularProgressIndicator();
+      return Center(child: CircularProgressIndicator());
     }
-
-    return Text(_cachedData.toString());
+    List<Widget> forcasts = [];
+    List<dynamic> forcastDatas = _cachedData["forcasts"];
+    return Container(
+      margin: EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: SingleChildScrollView(
+          child: Column(
+            children: forcastDatas.map((e) {
+              DateTime time = e["time"];
+              String description = e["description"];
+              Image icon = e["icon"];
+              double temp = (e["temp"] as num).toDouble();
+              return Container(
+                margin: EdgeInsets.only(top: 20, left: 20, right: 20),
+                child: Row(
+                  children: [
+                    Container(
+                      margin: EdgeInsets.only(bottom: 5),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.lightBlueAccent,
+                          borderRadius: BorderRadius.circular(50),
+                        ),
+                        child: SizedBox(width: 40, height: 40, child: icon),
+                      ),
+                    ),
+                    Expanded(
+                      child: Container(
+                        margin: EdgeInsets.only(left: 10),
+                        child: Wrap(
+                          alignment: WrapAlignment.start,
+                          children: [
+                            Text(
+                              DateFormat(
+                                'EEEE, MMMM d, yyyy hh:mm a - ',
+                              ).format(time),
+                            ),
+                            Text("$temp °C - "),
+                            Text(description),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -326,6 +508,24 @@ class AboutPage extends StatefulWidget {
 class _AboutPageState extends State<AboutPage> {
   @override
   Widget build(BuildContext context) {
-    return Text("About");
+    return Center(
+      child: Container(
+        margin: EdgeInsets.all(20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text("Project Weather", style: TextStyle(fontSize: 30)),
+            Text(
+              "This is an app that is developed for the course 1DV535 at Linnaeus University using Flutter and the OpenWeatherMap API.",
+              textAlign: TextAlign.center,
+            ),
+            Text(
+              "Developed by Kristoffer Gustafsson",
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
